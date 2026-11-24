@@ -1,0 +1,116 @@
+import { type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { join, extname, normalize, sep } from "node:path";
+
+// Handler server TanStack Start / Nitro yang di-hasilkan oleh `npm run build`.
+// File ini dihasilkan ulang setiap build (gitignored), jadi impor ini aman
+// dilakukan pada saat Vercel memaketkan fungsi serverless setelah build selesai.
+import serverHandler from "../.output/server/index.mjs";
+
+const PUBLIC_DIR = join(process.cwd(), ".output", "public");
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".cjs": "application/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".eot": "application/vnd.ms-fontobject",
+  ".txt": "text/plain",
+  ".xml": "application/xml",
+};
+
+function toWebRequest(req: IncomingMessage): Request {
+  const host = req.headers.host ?? "localhost";
+  const url = new URL(req.url ?? "/", `http://${host}`);
+  const headers = new Headers();
+  for (const [key, values] of Object.entries(req.headers ?? {})) {
+    if (values === undefined) continue;
+    const value = Array.isArray(values) ? values.join(", ") : String(values);
+    for (const part of value.split(",")) headers.append(key, part.trim());
+  }
+  const isBodyMethod = !["GET", "HEAD"].includes(req.method ?? "");
+  return new Request(url.toString(), {
+    method: req.method ?? "GET",
+    headers,
+    ...(isBodyMethod ? { body: req as unknown as BodyInit, duplex: "half" } : {}),
+  });
+}
+
+function isPublicPath(pathname: string): boolean {
+  return pathname === "/" || pathname.startsWith("/assets/") || /\.[\w]+$/.test(pathname);
+}
+
+function safePublicPath(pathname: string): string {
+  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
+  const parts = relative.split(sep).filter((p) => p !== ".." && p !== "." && p !== "");
+  return join(PUBLIC_DIR, ...parts);
+}
+
+export default async function handler(
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  try {
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`
+    );
+    const pathname = normalize(decodeURIComponent(url.pathname));
+
+    // --- Aset statis dari .output/public (dilayani Vercel/function) ---
+    if (isPublicPath(pathname)) {
+      const filePath = safePublicPath(pathname);
+      try {
+        await stat(filePath);
+        const content = await readFile(filePath);
+        const ext = extname(filePath).toLowerCase();
+        res.statusCode = 200;
+        res.setHeader("content-type", MIME[ext] ?? "application/octet-stream");
+        res.setHeader(
+          "cache-control",
+          ext === ".html" ? "public, max-age=0, must-revalidate" : "public, max-age=31536000, immutable"
+        );
+        res.end(content);
+        return;
+      } catch {
+        // Jika file tidak ditemukan, lanjutkan ke SSR (mis. halaman "/" yang
+        // tidak ada file-nya, akan dirender oleh TanStack Start).
+      }
+    }
+
+    // --- SSR melalui server Nitro TanStack Start ---
+    const request = toWebRequest(req);
+    const response = await (serverHandler as { fetch: Function }).fetch(
+      request,
+      {},
+      {}
+    );
+
+    res.statusCode = response.status;
+    for (const [key, value] of response.headers.entries()) {
+      res.setHeader(key, value);
+    }
+    const body = await response.arrayBuffer();
+    res.end(Buffer.from(body));
+  } catch (error) {
+    console.error("[vercel api/server]", error);
+    if (!(res as any).headersSent) {
+      res.statusCode = 500;
+      res.setHeader("content-type", "text/plain");
+      res.end("Internal Server Error");
+    }
+  }
+}

@@ -1,0 +1,1 @@
+export const WA_AUTOMATIC_REMINDERS_ENABLED = false;
