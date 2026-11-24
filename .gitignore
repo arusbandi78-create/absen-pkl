@@ -21,6 +21,7 @@ dist-ssr
 .nitro
 api/server/*
 !api/server/index.d.mts
+!api/server/index.mjs
 *.local
 
 # Wrangler / Cloudflare
