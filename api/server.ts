@@ -4,7 +4,7 @@ import { join, extname, normalize, sep } from "node:path";
 
 // Handler server TanStack Start / Nitro untuk Vercel (Node.js runtime).
 // Impor server output hasil `npm run build` (di-generate di .output/server).
-import serverHandler from "../.output/server/index.mjs";
+import serverHandler from "./server/index.mjs";
 
 const PUBLIC_DIR = join(process.cwd(), ".output", "public");
 
