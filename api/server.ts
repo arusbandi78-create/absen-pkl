@@ -2,9 +2,8 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { join, extname, normalize, sep } from "node:path";
 
-// Handler server TanStack Start / Nitro yang di-hasilkan oleh `npm run build`.
-// File ini dihasilkan ulang setiap build (gitignored), jadi impor ini aman
-// dilakukan pada saat Vercel memaketkan fungsi serverless setelah build selesai.
+// Handler server TanStack Start / Nitro untuk Vercel (Node.js runtime).
+// Impor server output hasil `npm run build` (di-generate di .output/server).
 import serverHandler from "../.output/server/index.mjs";
 
 const PUBLIC_DIR = join(process.cwd(), ".output", "public");
@@ -70,7 +69,7 @@ export default async function handler(
     );
     const pathname = normalize(decodeURIComponent(url.pathname));
 
-    // --- Aset statis dari .output/public (dilayani Vercel/function) ---
+    // --- Aset statis dari .output/public ---
     if (isPublicPath(pathname)) {
       const filePath = safePublicPath(pathname);
       try {
@@ -86,27 +85,36 @@ export default async function handler(
         res.end(content);
         return;
       } catch {
-        // Jika file tidak ditemukan, lanjutkan ke SSR (mis. halaman "/" yang
-        // tidak ada file-nya, akan dirender oleh TanStack Start).
+        // File tidak ditemukan → lanjut ke SSR
       }
     }
 
-    // --- SSR melalui server Nitro TanStack Start ---
+    // --- SSR melalui handler server TanStack Start / Nitro ---
     const request = toWebRequest(req);
-    const response = await (serverHandler as { fetch: Function }).fetch(
+
+    // Beberapa output build men-expor default sebagai object dengan properti fetch.
+    const handlerFn = (serverHandler as any)?.default ?? serverHandler;
+    const fetchFn = typeof handlerFn.fetch === "function" ? handlerFn.fetch.bind(handlerFn) : handlerFn;
+
+    const response = await fetchFn(
       request,
-      {},
-      {}
+      {}, // env (Vercel Node.js runtime tidak punya Cloudflare env)
+      {}  // ctx
     );
 
-    res.statusCode = response.status;
-    for (const [key, value] of response.headers.entries()) {
-      res.setHeader(key, value);
+    res.statusCode = response.status ?? 200;
+    if (response.headers) {
+      for (const [key, value] of response.headers.entries()) {
+        // Skip hop-by-hop headers yang bisa menyebabkan error di Vercel
+        const lower = key.toLowerCase();
+        if (["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"].includes(lower)) continue;
+        res.setHeader(key, value);
+      }
     }
     const body = await response.arrayBuffer();
     res.end(Buffer.from(body));
-  } catch (error) {
-    console.error("[vercel api/server]", error);
+  } catch (error: any) {
+    console.error("[vercel api/server]", error?.message ?? error);
     if (!(res as any).headersSent) {
       res.statusCode = 500;
       res.setHeader("content-type", "text/plain");
