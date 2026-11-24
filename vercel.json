@@ -4,6 +4,11 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": null,
+  "functions": {
+    "api/server.ts": {
+      "includeFiles": "api/server/**"
+    }
+  },
   "routes": [
     { "src": "/(.*)", "dest": "/api/server.ts" }
   ]
